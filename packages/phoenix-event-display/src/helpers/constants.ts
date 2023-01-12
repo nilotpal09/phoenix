@@ -10,4 +10,5 @@ export const EVENT_DATA_TYPE_COLORS = {
   Vertices: new Color(0xffd166),
   MissingEnergy: new Color(0xffffff),
   PlanarCaloCells: new Color(0xfff69a),
+  IrregularCaloCells: new Color(0xffff00),
 };

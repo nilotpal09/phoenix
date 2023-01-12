@@ -1,98 +1,42 @@
 import {
   Vector3,
   Object3D,
+  Color,
   CatmullRomCurve3,
-  TubeGeometry,
+  TubeBufferGeometry,
   MeshToonMaterial,
   Mesh,
+  BoxGeometry,
   BufferGeometry,
   LineBasicMaterial,
   Line,
   Group,
   Quaternion,
-  CylinderGeometry,
+  CylinderBufferGeometry,
   MeshBasicMaterial,
   BufferAttribute,
   PointsMaterial,
   Points,
-  BoxGeometry,
+  BoxBufferGeometry,
   MeshPhongMaterial,
-  SphereGeometry,
+  SphereBufferGeometry,
   LineSegments,
   LineDashedMaterial,
+  PolyhedronGeometry,
 } from 'three';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { EVENT_DATA_TYPE_COLORS } from '../../helpers/constants';
 import { RKHelper } from '../../helpers/rk-helper';
 import { CoordinateHelper } from '../../helpers/coordinate-helper';
 import { mergeBufferGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { TracksMaterial, TracksMesh } from './tracks';
-import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 
 /**
  * Physics objects that make up an event in Phoenix.
  */
 export class PhoenixObjects {
   /**
-   * Get tracks as three.js obejct.
-   * @param tracks Tracks params to construct tacks from.
-   * @returns The object containing tracks.
-   */
-  public static getTracks(tracks): Object3D {
-    const tracksMesh = new TracksMesh();
-    const tracksMaterial = new TracksMaterial({ lineWidth: 2 });
-
-    for (const track of tracks) {
-      if (!(track.pos?.length > 2)) {
-        if (track.dparams) {
-          track.pos = RKHelper.extrapolateTrackPositions(track);
-        }
-        track.extended = true;
-      }
-
-      if (track.pos.length < 2) {
-        console.log('Track too short, and extrapolation failed.');
-        continue;
-      }
-
-      // For cuts etc we currently need to have the cut parameters on the track
-      if (track?.dparams) {
-        if (!track?.phi) {
-          track.phi = track.dparams[2];
-        }
-        if (!track?.eta) {
-          track.eta = CoordinateHelper.thetaToEta(track.dparams[3]);
-        }
-        if (!track?.d0) {
-          track.d0 = track.dparams[0];
-        }
-        if (!track?.z0) {
-          track.z0 = track.dparams[1];
-        }
-      }
-
-      const points = track.pos.map((p) => new Vector3(p[0], p[1], p[2]));
-      const curve = new CatmullRomCurve3(points);
-      const vertices = curve.getPoints(50);
-
-      const color = track.color
-        ? parseInt(track.color, 16)
-        : EVENT_DATA_TYPE_COLORS.Tracks.getHex();
-
-      track.tid = tracksMesh.addTrack(vertices, color);
-      track.material = tracksMaterial;
-    }
-    tracksMesh.process();
-
-    const tracksObject = new Mesh(tracksMesh, tracksMaterial);
-    tracksObject.name = 'Track';
-    for (const track of tracks) {
-      track.uuid = tracksObject.uuid;
-    }
-    return tracksObject;
-  }
-
-  /**
-   * Create and return a Track object from the given parameters
+   * Process the Track from the given parameters (and positions)
+   * and get it as a geometry.
    * @param trackParams Parameters of the Track.
    * @returns Track object.
    */
@@ -156,7 +100,7 @@ export class PhoenixObjects {
     const curve = new CatmullRomCurve3(points);
 
     // TubeGeometry
-    const geometry = new TubeGeometry(curve, undefined, 2);
+    const geometry = new TubeBufferGeometry(curve, undefined, 2);
     const material = new MeshToonMaterial({ color: objectColor });
     const tubeObject = new Mesh(geometry, material);
 
@@ -188,7 +132,7 @@ export class PhoenixObjects {
   }
 
   /**
-   * Create and return a Jet object from the given parameters.
+   * Process the Jet from the given parameters and get it as a geometry.
    * @param jetParams Parameters for the Jet.
    * @returns Jet object.
    */
@@ -225,7 +169,14 @@ export class PhoenixObjects {
     const quaternion = new Quaternion();
     quaternion.setFromUnitVectors(v1, v2);
 
-    const geometry = new CylinderGeometry(width, 10, length, 50, 50, false); // Cone
+    const geometry = new CylinderBufferGeometry(
+      width,
+      10,
+      length,
+      50,
+      50,
+      false
+    ); // Cone
 
     const material = new MeshBasicMaterial({
       color: jetParams.color ?? EVENT_DATA_TYPE_COLORS.Jets,
@@ -245,7 +196,7 @@ export class PhoenixObjects {
   }
 
   /**
-   * Create and return a Hits object according to the given parameters.
+   * Process the Hits from the given parameters and get them as a geometry.
    * @param hitsParams Either an array of positions, or of Hit objects. If objects, they must contain 'pos', the array of [x,y,z] positions,
    * Can optionally contain extraInfo, which will be added to the resultant hit.
    * `type` tells Phoenix how to draw this - currently can be Point (default), or Line.
@@ -437,43 +388,32 @@ export class PhoenixObjects {
   }
 
   /**
-   * Create and return a Cluster object from the given parameters.
+   * Process the Cluster from the given parameters and get it as a geometry.
    * @param clusterParams Parameters for the Cluster.
-   * @param defaultRadius Default cylindrical radius (rho) where to draw barrel Clusters.
-   * @param defaultZ Default plane in z where to draw endcap Clusters.
-   * @param energyScaling Amount to multiply the energy by to get the depth of the cluster.
+   * @param drawRadius Radius where to draw barrel Clusters
+   * @param drawZ Plane in z where to draw endcap Clusters
+   * @param energyScaling Amount to multply the energy by to get the depth of the cell
    * @returns Cluster object.
    */
   public static getCluster(
-    clusterParams: {
-      energy: number;
-      phi: number;
-      eta: number;
-      radius?: number;
-      z?: number;
-      side?: number;
-      length?: number;
-      color?: string;
-      theta?: number;
-      uuid?: string;
-    },
-    defaultRadius: number = 1800,
-    defaultZ: number = 3600,
-    energyScaling: number = 0.03
+    clusterParams: any,
+    drawRadius: number = 1800.0,
+    drawZ: number = 3600.0,
+    energyScaling: number = 0.03,
+    fixedDepth: number = 0.0
   ): Object3D {
-    const clusterLength = clusterParams.energy * energyScaling;
-    const clusterWidth = clusterParams.side ?? 40;
+    const maxR2 = drawRadius * drawRadius;
+    const maxZ = drawZ;
+    const length = clusterParams.energy * energyScaling;
 
     // geometry
-    const cube = PhoenixObjects.getCaloCube(
-      clusterParams,
-      clusterWidth,
-      clusterLength
-    );
+    const cube = PhoenixObjects.getCaloCube(length, 40, clusterParams);
     const position = PhoenixObjects.getCaloPosition(
       clusterParams,
-      defaultRadius,
-      defaultZ
+      drawZ,
+      drawRadius,
+      maxR2,
+      maxZ
     );
 
     cube.position.copy(position);
@@ -490,183 +430,106 @@ export class PhoenixObjects {
   /**
    * Get the position for a Calo hit in cartesian coordinates
    * @param clusterParams Parameters for the Cluster (which must include theta and phi)
-   * @param defaultRadius Default cylindrical radius (rho) where to draw barrel Clusters
-   * @param defaultZ Default position along the z axis
+   * @param drawRadius Radius where to draw barrel Clusters
+   * @param maxR2 Maximum permitted radius squared
+   * @param maxZ Maximum position along the z axis
    * @returns Corrected cartesian position.
    */
   private static getCaloPosition(
-    clusterParams: {
-      phi: number;
-      eta: number;
-      radius?: number;
-      z?: number;
-      theta?: number;
-    },
-    defaultRadius: number = 1800,
-    defaultZ: number = 3600
+    clusterParams: { phi: number; eta: number; theta: number },
+    drawZ: number,
+    drawRadius: number,
+    maxR2: number,
+    maxZ: number
   ) {
-    const theta =
-      clusterParams.theta ?? CoordinateHelper.etaToTheta(clusterParams.eta);
-    const radius = clusterParams.radius ?? defaultRadius;
+    const theta = CoordinateHelper.etaToTheta(clusterParams.eta);
+    clusterParams.theta = theta;
 
     const position = CoordinateHelper.sphericalToCartesian(
-      radius,
+      drawZ + drawRadius,
       theta,
       clusterParams.phi
     );
 
-    if (clusterParams.z) {
+    // How to generalise to other experiments? Pass in limit lambda?
+    const cylRadius2 = position.x * position.x + position.y * position.y;
+    if (cylRadius2 > maxR2) {
       position.setLength(
-        (position.length() * clusterParams.z) / Math.abs(position.z)
+        (position.length() * Math.sqrt(maxR2)) / Math.sqrt(cylRadius2)
       );
     }
 
-    if (!clusterParams.radius && !clusterParams.z) {
-      if (Math.abs(position.z) > defaultZ) {
-        position.setLength(
-          (position.length() * defaultZ) / Math.abs(position.z)
-        );
-      }
+    if (Math.abs(position.z) > maxZ) {
+      position.setLength((position.length() * maxZ) / Math.abs(position.z));
     }
-
     return position;
   }
 
   /**
-   * Get the cuboid geometry for a Calorimeter hit
-   * @param clusterParams  Parameters for the Cluster (can include color)
-   * @param defaultCellWidth width of the cuboid
-   * @param defaultCellLength length of the cuboid
-   * @returns Geometry.
+   * Get the cuboid geometry for a Calo hit
+   * @param length length of the cuboid
+   * @param width width of the cuboid
+   * @param clusterParams Parameters for the Cluster (which must include color
+   * @returns Geometry
    */
   private static getCaloCube(
-    clusterParams: {
-      length?: number;
-      side?: number;
-      color?: string;
-    },
-    defaultCellWidth: number = 30,
-    defaultCellLength: number = 30
+    length: number,
+    width: number = 30,
+    clusterParams: any
   ) {
-    const cellWidth = clusterParams.side ?? defaultCellWidth;
-    let cellLength = clusterParams.length ?? defaultCellLength;
-
-    if (cellLength < cellWidth) {
-      cellLength = cellWidth;
+    if (length < width) {
+      length = width;
     }
-
-    const geometry = new BoxGeometry(cellWidth, cellWidth, cellLength);
-
+    const geometry = new BoxBufferGeometry(width, width, length);
     // material
     const material = new MeshPhongMaterial({
       color: clusterParams.color ?? EVENT_DATA_TYPE_COLORS.CaloClusters,
     });
-
     // object
     const cube = new Mesh(geometry, material);
     return cube;
   }
 
   /**
-   * Create and return a Calorimeter cell object from the given parameters.
+   * Process the CaloCell from the given parameters and get it as a geometry.
    * @param caloCells Parameters for the CaloCell.
    * @returns Calorimeter Cell object.
    */
-  public static getCaloCell(caloCellParams: {
+  public static getCaloCell(caloCells: {
     energy: number;
     phi: number;
     eta: number;
-    radius?: number;
-    z?: number;
-    theta?: number;
-    color?: string;
-    side?: number;
-    length?: number;
+    theta: number;
     uuid: string;
   }): Object3D {
-    const defaultRadius = 1700;
-    const defaultZ = 2000;
-    const defaultSide = 30;
-    const defaultLength = 30;
+    const drawRadius = 1700; // FIXME - I really need to get this from somewhere. Atlantis has a lookup based on XML geometry.
+    const drawZ = 2000;
+    const maxR2 = drawRadius * drawRadius;
+    const maxZ = drawZ;
+    const length = 30;
 
     // geometry
-    const cube = PhoenixObjects.getCaloCube(
-      caloCellParams,
-      defaultSide,
-      defaultLength
-    );
+    const cube = PhoenixObjects.getCaloCube(length, 30, caloCells);
     const position = PhoenixObjects.getCaloPosition(
-      caloCellParams,
-      defaultRadius,
-      defaultZ
+      caloCells,
+      drawZ,
+      drawRadius,
+      maxR2,
+      maxZ
     );
+
     cube.position.copy(position);
 
-    if (!caloCellParams.radius && !caloCellParams.z) {
-      cube.lookAt(new Vector3(0, 0, 0));
-    } else if (caloCellParams.z && !caloCellParams.radius) {
-      cube.lookAt(new Vector3(position.x, position.y, 0));
-    }
-    if (caloCellParams.radius) {
-      cube.lookAt(new Vector3(0, 0, position.z));
-    }
-
-    cube.userData = Object.assign({}, caloCellParams);
+    cube.userData = Object.assign({}, caloCells);
     cube.name = 'Cluster';
     // Setting uuid for selection from collections info
-    caloCellParams.uuid = cube.uuid;
+    caloCells.uuid = cube.uuid;
 
     return cube;
   }
 
   /**
-   * Get the planar calo cells from parameters.
-   * @param caloCells Parameters to build planar calo cells.
-   * @returns Geometry.
-   */
-  public static getPlanarCaloCells(caloCells: any[]): Object3D {
-    const geoms = [];
-    for (const caloCell of caloCells) {
-      const position = caloCell.pos;
-      if (!position) {
-        continue;
-      }
-
-      const length = caloCell.energy * 0.22;
-      const size = caloCell.cellSize;
-      const plane = caloCell.plane;
-
-      // geometry
-      const geometry = new BoxGeometry(size, size, length);
-      geometry.translate(position[0], position[1], plane[3] + length / 2);
-      const qrot = new Quaternion();
-      qrot.setFromUnitVectors(
-        new Vector3(0, 0, 1),
-        new Vector3(...plane.slice(0, 3))
-      );
-      geometry.applyQuaternion(qrot);
-      geoms.push(geometry);
-    }
-
-    const material = new MeshPhongMaterial({
-      color: caloCells[0].color ?? EVENT_DATA_TYPE_COLORS.PlanarCaloCells,
-    });
-
-    const outerBox = new Mesh(
-      BufferGeometryUtils.mergeBufferGeometries(geoms),
-      material
-    );
-
-    outerBox.userData = Object.assign({}, caloCells[0]);
-    outerBox.name = 'PlanarCaloCell';
-    for (const caloCell of caloCells) {
-      caloCell.uuid = outerBox.uuid;
-    }
-    return outerBox;
-  }
-
-  /**
-   * Create and return a PlanarCaloCell object from the given parameters.
+   * Process the PlanarCaloCell from the given parameters and get it as a geometry.
    * @param caloCells Parameters for the Planar Calorimeter.
    * @returns Planar Calorimeter object.
    */
@@ -681,7 +544,7 @@ export class PhoenixObjects {
     const plane = caloCells.plane;
 
     // geometry
-    const geometry = new BoxGeometry(size, size, length);
+    const geometry = new BoxBufferGeometry(size, size, length);
 
     // there is a need of an outer box to place the proper one inside of it
     const outerBox = new Object3D();
@@ -722,29 +585,23 @@ export class PhoenixObjects {
   }
 
   /**
-   * Create and return a Vertex object from the given parameters.
+   * Process the Vertex from the given parameters and get it as a geometry.
    * @param vertexParams Parameters for the Vertex.
    * @returns Vertex object.
    */
   public static getVertex(vertexParams: any): Object3D {
     // geometry
-    const geometry = new SphereGeometry(vertexParams.size ?? 3);
-    console.log(geometry);
+    const geometry = new SphereBufferGeometry(3);
     // material
     const material = new MeshPhongMaterial({
       color: vertexParams.color ?? EVENT_DATA_TYPE_COLORS.Vertices,
     });
     // object
     const sphere = new Mesh(geometry, material);
-    if ('pos' in vertexParams) {
-      sphere.position.x = vertexParams.pos[0];
-      sphere.position.y = vertexParams.pos[1];
-      sphere.position.z = vertexParams.pos[2];
-    } else {
-      sphere.position.x = vertexParams.x;
-      sphere.position.y = vertexParams.y;
-      sphere.position.z = vertexParams.z;
-    }
+    sphere.position.x = vertexParams.x;
+    sphere.position.y = vertexParams.y;
+    sphere.position.z = vertexParams.y;
+
     sphere.userData = Object.assign({}, vertexParams);
     sphere.name = 'Vertex';
     // Setting uuid for selection from collections info
@@ -754,7 +611,7 @@ export class PhoenixObjects {
   }
 
   /**
-   * Create and return a MET object from the given parameters.
+   * Process the Vertex from the given parameters and get it as a geometry.
    * @param metParams Parameters for the Vertex.
    * @returns MET object.
    */
@@ -781,5 +638,44 @@ export class PhoenixObjects {
     metParams.uuid = object.uuid;
 
     return object;
+  }
+
+  /**
+   * Type for drawing irregular calorimeter cell comprising 8 xyz vertices in arbitrary geometry.
+   * @param layer Calorimeter layer
+   * @param vtx Flattened list of 8 vertex coordinates (24 floats)
+   * @param color [R,G,B] integer list
+   * @param opacity value from 0 to 1
+   * @returns the cell
+   */
+   public static getIrregularCaloCell(irrCells: {    
+    type: any,
+    layer: number,
+    vtx: any,
+    color: string,
+    opacity: any,
+   }): Object3D {
+
+    const verticesOfCube = [];
+    for (let i = 0; i < 24; i += 3) {
+      verticesOfCube.push( new Vector3(irrCells.vtx[i],irrCells.vtx[i+1],irrCells.vtx[i+2]));
+    }
+    const geometry = new ConvexGeometry(verticesOfCube);
+    const cell_color = new Color("rgb(" + irrCells.color[0].toString() + "," + irrCells.color[1].toString() + "," + irrCells.color[2].toString() + ")");
+
+    // material
+    const material = new MeshPhongMaterial({
+      color: cell_color,
+      transparent: true,
+      opacity: irrCells.opacity
+      // wireframe: true
+    });
+
+    // object
+    const cell = new Mesh(geometry, material);
+    cell.userData = Object.assign({});
+    cell.name = 'IrregularCaloCell';
+
+    return cell;
   }
 }
